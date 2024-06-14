@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import sqlite3
 from argparse import Namespace
+from asyncio import Future
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from hashlib import sha256
 
-from asgiref.sync import async_to_sync, sync_to_async
+from asgiref.sync import async_to_sync
 from langchain_chroma import Chroma
-from langchain_community.document_loaders.generic import GenericLoader
 from langchain_community.document_loaders.text import TextLoader
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
@@ -135,10 +136,10 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         self.registry = Registry()
 
-    def _upload_dir(self, path):
+    def _upload_dir(self, path) -> Future[list[str | None]]:
         logger.info(f"Trying to upload directory '{path}'")
 
-        files = []
+        files: list[Awaitable[str | None]] = []
         for dirpath, _, filenames in os.walk(path, followlinks=True):
             for filename in filenames:
                 file_path = os.path.join(dirpath, filename)
@@ -149,6 +150,8 @@ class DatabaseManager(metaclass=SingletonMeta):
                     continue
 
                 files.append(self._upload_file(file_path))
+
+        return asyncio.gather(*files, return_exceptions=False)
 
     def _upload_uri(self, uri: str) -> bytes | None: ...
 
@@ -250,24 +253,25 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         return file_id
 
-    async def upload(self, path: str):
+    async def upload(self, path: str) -> tuple[str | None, ...]:
 
         if not os.path.isfile(path) and not os.path.isdir(path):
             protocol_end = path.find("://")
             if protocol_end == -1:
                 logger.error(f"Invalid path '{path}'")
-                return None
+                return (None, )
 
-            return self._upload_uri(path)
+            return (None, )
+            # return self._upload_uri(path)
 
         # Garantee that that it is a file or a directory
         if os.path.isdir(path):
-            self._upload_dir(path)
+            return await self._upload_dir(path)
         elif os.path.isfile(path):
-            return await self._upload_file(path)
+            return (await self._upload_file(path), )
         else:
             logger.error(f"Unexpected path '{path}'")
-            return None
+            return (None, )
 
 
 def main(args: Namespace):
@@ -278,4 +282,8 @@ def main(args: Namespace):
         print("hey")
         return await dm.upload(path=args.upload)
 
-    upload()
+    files = upload()
+
+    print("Succesfully uploaded files:")
+    for file in files:
+        print(file)
