@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 from argparse import Namespace
 
@@ -11,20 +9,15 @@ logger = logging.getLogger(__name__)
 def main(args: Namespace):
     dm = DatabaseManager()
 
-    if args.upload:
-
+    if args.input:
         @async_to_sync
         async def upload():
-            print("hey")
-            return await dm.upload(path=args.upload)
+            return await dm.upload(path=args.input)
 
         files = upload()
 
-        print("Succesfully uploaded files:")
         for file in files:
-            print(file)
-
-
-    print(dm.registry.get_missing_chunks())
-    dm.sync()
-    print(dm.registry.get_missing_chunks())
+            if file:
+                logger.info(f"File uploaded: {file}")
+            else:
+                logger.warning(f"One file has failed to upload")

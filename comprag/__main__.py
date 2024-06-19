@@ -1,8 +1,9 @@
 import argparse
 import logging.handlers
-from dotenv import load_dotenv
 
 import sync
+import upload
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ def main(
     )
 
     match args.subcommand:
+        case "upload":
+            return upload.main(args)
         case "sync":
             return sync.main(args)
         case command_name:
@@ -54,11 +57,14 @@ if __name__ == "__main__":
         "-u",
     )
 
+    upload_parser = subcommand_parsers.add_parser(name="upload")
+    upload_parser.add_argument("--input", "-i", required=True, help="The input path can be any file, directory or URI")
+
     sync_parser = subcommand_parsers.add_parser(name="sync")
     sync_parser.add_argument(
-        "--upload",
-        "-u",
-        help="The file or folder to upload to the database",
+        "--list",
+        "-ls",
+        help="List the awailable databases and their statuses",
     )
 
     args = parser.parse_args()

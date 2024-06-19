@@ -17,6 +17,7 @@ langchain-text-splitters = "^0.2.1"
 langchain-openai = "^0.1.8"
 asgiref = "^3.8.1"
 asyncio = "^3.4.3"
+langchain-mistralai = "^0.1.8"
 
 [tool.poetry.group.dev.dependencies]
 isort = "^5.13.2"
