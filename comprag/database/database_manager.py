@@ -6,9 +6,10 @@ import os
 from asyncio import Future
 from collections.abc import Awaitable
 from hashlib import sha256
+from pprint import pformat
 from typing import Literal
 
-from database.database_config import Database, Loader, get_databases
+from database.database_config import Database, Loader, Reranker, get_databases
 from database.registry import ChunkId, FileId, FileMetaData, Registry, VectorStoreId
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -21,6 +22,7 @@ class DatabaseManager(metaclass=SingletonMeta):
     def __init__(self):
         self.databases: list[Database] = get_databases()
         self.loader = Loader()
+        self.reranker = Reranker()
         self.registry = Registry()
 
     def _upload_dir(self, path) -> Future[list[FileId | None]]:
@@ -43,6 +45,9 @@ class DatabaseManager(metaclass=SingletonMeta):
     def _upload_uri(self, uri: str) -> bytes | None: ...
 
     def _chunk_file(self, pages: list[Document], ext) -> list[Document]:
+        # TODO: Should factor out into a saparate configuration
+
+        # XML SPLITTER https://www.restack.io/docs/langchain-knowledge-langchain-xml-splitter
         character_splitter = RecursiveCharacterTextSplitter(separators=["\n\n", "\n", ". ", " ", ""], chunk_size=1000, chunk_overlap=200)
 
         return character_splitter.split_documents(pages)
@@ -230,6 +235,16 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         knn_results, mmr_results, mb25_results = await asyncio.gather(knn_future, mmr_future, mb25_future, return_exceptions=False)
 
+        # The results likely contain duplicate documents
+        # We will attribute them in the following order
+        # mb25 > knn > mmr because of higher computational complexity
+
+        # TODO: Could do in O(H * n log n) with H as the cost of a hashfunction
+
+        # Dedupe O(n^2 * M) where M is the lenght of the LCS
+        mmr_results = [doc for doc in mmr_results if doc not in knn_results and doc not in mb25_results]
+        knn_results = [doc for doc in knn_results if doc not in mb25_results]
+
         # Create tags for the different methods, to collect metadata
         knn_tag: int = 0
         mmr_tag: int = 1
@@ -241,7 +256,7 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         weights[knn_tag] = knn
         weights[mmr_tag] = mmr
-        weights[knn_tag] = mb25
+        weights[mb25_tag] = mb25
 
         # Tag the results
         results: list[tuple[Document, int]] = []
@@ -257,15 +272,19 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         if combination_method == "rerank":
             # TODO: Make use of metadata such for citing and additional context
-            pairs = [(query, self.registry.get_content(doc)) for doc, _ in results]
-            relevances = self.batch_similarity(pairs)
-            reranked = [(sim * weights[tag], doc) for sim, (doc, tag) in zip(relevances, results)]
+            reranked = self.reranker.rerank(
+                query=query,
+                documents=[self.registry.get_content(doc) for doc, _ in results],
+                reweight=[weights[tag] for _, tag in results],
+            )
 
-            reranked.sort(reverse=True)  # Desc
-            top_k = [doc for _, doc in reranked][:k]
+            logger.debug(f"fetched documents: {pformat(reranked)}")
+
+            top_k = [results[index][0] for _, index in reranked][:k]
 
             # Get the actual file ids to ba able to collect telemetry
             return [(self.registry.get_chunk_id(doc), self.registry.get_content(doc)) for doc in top_k]
 
         elif combination_method == "dp":
+            # TODO: Implement the dynamic programming algorithm
             raise NotImplementedError("WIP")

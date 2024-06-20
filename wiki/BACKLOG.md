@@ -1,4 +1,7 @@
 - [ ] ADD pyfzf for nicer searching
-- [ ] Change chroma db to milvus
+- [ ] Change chroma db to milvus: https://github.com/milvus-io/milvus
  - [ ] Instead of N separate databases we could have a single
  - [ ] We can inherit from a base retriever to add a filtering functionality
+- [ ] More advanced reranker with https://huggingface.co/BAAI/bge-m3
+- [ ] Check out the "faster" cpu optimized version from https://huggingface.co/EmbeddedLLM/bge-reranker-base-onnx-o3-cpu
+- [ ] Add db filter: https://github.com/langchain-ai/langchain/discussions/9645
