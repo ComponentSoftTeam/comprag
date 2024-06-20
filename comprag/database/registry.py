@@ -1,7 +1,9 @@
 import json
 import sqlite3
 from dataclasses import dataclass
+from hashlib import sha256
 
+from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 from util.singleton import SingletonMeta
 
@@ -9,6 +11,7 @@ VectorStoreId = str
 VectorStoreEntryId = str
 ChunkId = str
 FileId = str
+
 
 @dataclass
 class FileMetaData:
@@ -88,7 +91,6 @@ class Registry(metaclass=SingletonMeta):
                 )
             conn.commit()
 
-
     def add_chunks(self, chunks_metadata: list[FileMetaData]):
 
         file_id_name = list(set((chunk.file_id, chunk.file_name) for chunk in chunks_metadata))
@@ -111,17 +113,20 @@ class Registry(metaclass=SingletonMeta):
                 for vector_store_id, entry_id in chunk_metadata.vector_store_entries.items():
                     # Check if the vector store exists
                     cursor.execute(
-                       """
+                        """
                     SELECT vector_store_id FROM vector_stores WHERE vector_store_id = ?
-                    """, (vector_store_id,))
+                    """,
+                        (vector_store_id,),
+                    )
 
                     if not cursor.fetchone():
                         # Insert the vector store
                         cursor.execute(
-                           """
+                            """
                         INSERT OR REPLACE INTO vector_stores (vector_store_id) VALUES (?)
-                        """, (vector_store_id,))
-                    
+                        """,
+                            (vector_store_id,),
+                        )
 
                     cursor.execute(
                         """
@@ -143,12 +148,11 @@ class Registry(metaclass=SingletonMeta):
 
             conn.commit()
 
+    def get_content(self, doc: Document) -> str:
+        return doc.page_content
+
     def get_chunk_id(self, doc: Document) -> ChunkId:
-        
-
-
-
-
+        return sha256(self.get_content(doc).encode()).hexdigest()
 
     def has_file(self, file_id: FileId) -> bool:
         with sqlite3.connect(self.REGISTRY_PATH) as conn:
@@ -178,7 +182,7 @@ class Registry(metaclass=SingletonMeta):
         with sqlite3.connect(self.REGISTRY_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute(
-            """
+                """
                 SELECT
                     files.file_name, files.file_id, file_chunks.chunk_id, chunk_metadata, content
                 FROM
@@ -187,7 +191,7 @@ class Registry(metaclass=SingletonMeta):
                     files ON file_chunks.file_id = files.file_id
                 WHERE file_chunks.chunk_id = ?
             """,
-            (chunk_id,),
+                (chunk_id,),
             )
 
             file_name, file_id, chunk_id, chunk_metadata, content = cursor.fetchone()
@@ -217,10 +221,8 @@ class Registry(metaclass=SingletonMeta):
 
             return file_metadata
 
-
     def get_chunks(self, chunk_ids: list[ChunkId]) -> list[FileMetaData]:
         return [self.get_chunk(chunk_id) for chunk_id in chunk_ids]
-
 
     def get_file(self, file_id: FileId) -> list[FileMetaData]:
         with sqlite3.connect(self.REGISTRY_PATH) as conn:
@@ -278,14 +280,13 @@ class Registry(metaclass=SingletonMeta):
 
         return file_chunks
 
-
     def get_missing_chunks(self) -> dict[VectorStoreId, list[ChunkId]]:
         """
 
-            Returns multiple chunks that are missing from the database
+        Returns multiple chunks that are missing from the database
 
-            We expect each chunk id to be present in each and every vector store
-            This returns the vectorstore - chunkids where it is not true 
+        We expect each chunk id to be present in each and every vector store
+        This returns the vectorstore - chunkids where it is not true
         """
 
         # Get the existing (vector store, chunk_id) pairs
@@ -293,7 +294,7 @@ class Registry(metaclass=SingletonMeta):
             cursor = conn.cursor()
 
             cursor.execute(
-            """
+                """
             SELECT 
                 vs.vector_store_id, 
                 fc.chunk_id
@@ -318,4 +319,3 @@ class Registry(metaclass=SingletonMeta):
                 missing_chunks[vector_store_id].append(chunk_id)
 
         return missing_chunks
-

@@ -1,1 +1,4 @@
-- ADD pyfzf for nicer searching
+- [ ] ADD pyfzf for nicer searching
+- [ ] Change chroma db to milvus
+ - [ ] Instead of N separate databases we could have a single
+ - [ ] We can inherit from a base retriever to add a filtering functionality

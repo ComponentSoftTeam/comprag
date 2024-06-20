@@ -1,6 +1,7 @@
 import argparse
 import logging.handlers
 
+import search
 import sync
 import upload
 from dotenv import load_dotenv
@@ -33,6 +34,8 @@ def main(
             return upload.main(args)
         case "sync":
             return sync.main(args)
+        case "search":
+            return search.main(args)
         case command_name:
             logger.error(f"Not supported command '{command_name}'.")
             raise RuntimeError("The command is not yet implemented")
@@ -51,12 +54,6 @@ if __name__ == "__main__":
         required=True,
     )
 
-    web_parser = subcommand_parsers.add_parser(name="web")
-    web_parser.add_argument(
-        "--port",
-        "-u",
-    )
-
     upload_parser = subcommand_parsers.add_parser(name="upload")
     upload_parser.add_argument("--input", "-i", required=True, help="The input path can be any file, directory or URI")
 
@@ -66,6 +63,18 @@ if __name__ == "__main__":
         "-ls",
         help="List the awailable databases and their statuses",
     )
+
+    search_parser = subcommand_parsers.add_parser(name="search")
+    search_parser.add_argument("--query", "-q", help="The query to search for", required=True)
+    search_parser.add_argument("--k", "-k", help="The number of results to return", default=4, type=int)
+
+    search_method = search_parser.add_mutually_exclusive_group(required=True)
+    search_method.add_argument("--rerank", action="store_true", help="Use the rerank combiner")
+    search_method.add_argument("--dp", action="store_true", help="Use the dp combiner")
+
+    search_method.add_argument("--knn", action="store_true", help="Use only the the KNN search tool")
+    search_method.add_argument("--mmr", action="store_true", help="Use only the the MMR search tool")
+    search_method.add_argument("--bm25", action="store_true", help="Use only the the BM25 search tool")
 
     args = parser.parse_args()
 
