@@ -5,6 +5,7 @@ import logging
 import os
 from asyncio import Future
 from collections.abc import Awaitable
+from enum import Enum
 from hashlib import sha256
 from pprint import pformat
 from typing import Callable, Literal
@@ -18,8 +19,11 @@ from util.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
 
-SearchMethodName = str
-SearchMethodTag = int
+
+class SearchMethod(Enum):
+    KNN = "knn"
+    MMR = "mmr"
+    BM25 = "bm25"
 
 
 class DatabaseManager(metaclass=SingletonMeta):
@@ -28,7 +32,6 @@ class DatabaseManager(metaclass=SingletonMeta):
         self.loader = Loader()
         self.reranker = Reranker()
         self.registry = Registry()
-        self.search_methods: dict[SearchMethodName, SearchMethodTag] = {}
 
         registered = self.registry.get_vector_store_ids()
         present = [database.id for database in self.databases]
@@ -166,7 +169,7 @@ class DatabaseManager(metaclass=SingletonMeta):
     def get_database(self, database_id: VectorStoreId) -> Database | None:
         return next((db for db in self.databases if db.id == database_id), None)
 
-    def mmr_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[Document]]:
+    def mmr_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[tuple[Document, SearchMethod]]]:
         """
         Returns the top K most similar entries in the specified vector store
         Internali MMR is used.
@@ -175,6 +178,7 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         The returned tuple contains the relevance score [0-1] and the document itself
         """
+
         database = self.get_database(database_id)
         if not database:
             logger.error(f"Database '{database_id}' not found")
@@ -184,15 +188,19 @@ class DatabaseManager(metaclass=SingletonMeta):
 
             return default_value()
 
-        return database.vector_store.amax_marginal_relevance_search(k=k, fetch_k=k * 5, query=query)
+        async def search() -> list[tuple[Document, SearchMethod]]:
+            return [(res, SearchMethod.MMR) for res in (await database.vector_store.amax_marginal_relevance_search(k=k, fetch_k=k * 5, query=query))]
 
-    def bm25_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[Document]]:
+        return search()
+
+    def bm25_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[tuple[Document, SearchMethod]]]:
         """
         Returns the top K most similar entries by keyword matches.
         Internali bm25 is used.
 
         The returned tuple contains the relevance score [0-1] and the document itself
         """
+
         database = self.get_database(database_id)
         if not database:
             logger.error(f"Database '{database_id}' not found")
@@ -208,13 +216,14 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         return default_value()
 
-    def similarity_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[Document]]:
+    def similarity_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[tuple[Document, SearchMethod]]]:
         """
         Returns the top K most similar entries in the specified vector store
         Internaly an approximate KNN is used.
 
         The returned tuple contains the relevance score [0-1] and the document itself
         """
+
         database = self.get_database(database_id)
         if not database:
             logger.error(f"Database '{database_id}' not found")
@@ -225,10 +234,10 @@ class DatabaseManager(metaclass=SingletonMeta):
             return default_value()
 
         # TODO: Check if the databases actulaly support this functionality and if they implement it correctly
-        return database.vector_store.asimilarity_search(query=query, k=k)
+        async def search() -> list[tuple[Document, SearchMethod]]:
+            return [(res, SearchMethod.KNN) for res in (await database.vector_store.asimilarity_search(query=query, k=k))]
 
-    def batch_similarity(self, pairs: list[tuple[str, str]]) -> list[float]:
-        return len(pairs) * [0.5]
+        return search()
 
     async def search_by_database(
         self,
@@ -238,11 +247,11 @@ class DatabaseManager(metaclass=SingletonMeta):
         k: int = 4,
         knn: float = 1,
         mmr: float = 1,
-        mb25: float = 1,
+        bm25: float = 1,
         return_all: bool = False,
-    ) -> list[tuple[Document, int]]:
+    ) -> list[tuple[Document, SearchMethod]]:
         """
-        Combines the knn, mmr, and mb25 search results to create a better search function for the given database
+        Combines the knn, mmr, and bm25 search results to create a better search function for the given database
 
         You may specify the linear contributions of each
         The relevance for the original query will be determined by a reranker, but you may infulecne this score with the linear factors
@@ -252,47 +261,34 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         knn_future = self.similarity_search_by_database(database_id, query=query, k=k)
         mmr_future = self.mmr_search_by_database(database_id, query=query, k=k)
-        mb25_future = self.mmr_search_by_database(database_id, query=query, k=k)
+        bm25_future = self.bm25_search_by_database(database_id, query=query, k=k)
 
-        knn_results, mmr_results, mb25_results = await asyncio.gather(knn_future, mmr_future, mb25_future, return_exceptions=False)
+        knn_results, mmr_results, bm25_results = await asyncio.gather(knn_future, mmr_future, bm25_future, return_exceptions=False)
 
         # The results likely contain duplicate documents
         # We will attribute them in the following order
-        # mb25 > knn > mmr because of higher computational complexity
+        # bm25 > knn > mmr because of higher computational complexity
 
-        # TODO: Could do in O(H * n log n) with H as the cost of a hashfunction
+        # Remove duplicates in O(k^2*n^2) time, where n is the expected length of each document
+        # Note that this could be done in O(k * log(k) * n) with a sort and linear set operations, as well as KMP / Z algorithm for string matching
 
-        # Dedupe O(n^2 * M) where M is the lenght of the LCS
-        mmr_results = [doc for doc in mmr_results if doc not in knn_results and doc not in mb25_results]
-        knn_results = [doc for doc in knn_results if doc not in mb25_results]
+        knn_docs = [doc for doc, _ in knn_results]
+        bm25_docs = [doc for doc, _ in bm25_results]
 
-        mmr_results = [doc for doc in mmr_results if doc not in mb25_results]
+        mmr_results = [(doc, tag) for (doc, tag) in mmr_results if doc not in knn_docs and doc not in bm25_docs]
+        knn_results = [(doc, tag) for (doc, tag) in knn_results if doc not in bm25_docs]
 
-        # Create tags for the different methods, to collect metadata
-        # TODO: Factor out when the query types become independent
-        knn_tag = 0
-        mmr_tag = 1
-        mb25_tag = 2
+        weights: dict[SearchMethod, float] = {}
+        weights[SearchMethod.KNN] = knn
+        weights[SearchMethod.MMR] = mmr
+        weights[SearchMethod.BM25] = bm25
 
-        tags = [knn_tag, mmr_tag, mb25_tag]
-        tags_size = max(tags) + 1
-        weights = [0.0] * tags_size
-
-        weights[knn_tag] = knn
-        weights[mmr_tag] = mmr
-        weights[mb25_tag] = mb25
-
-        # Tag the results
-        results: list[tuple[Document, int]] = []
-        results.extend([(doc, knn_tag) for doc in knn_results])
-        results.extend([(doc, mmr_tag) for doc in mmr_results])
-        results.extend([(doc, mb25_tag) for doc in mb25_results])
+        # Collect
+        results = bm25_results + knn_results + mmr_results
 
         # Two algorithms are considered
         # 1. Append all of the results together and sort by relevance to the original query
         # 2. Create a cross product of relevances and pick the best k out of them (like the mmr does)
-
-        # The (1.) is O(k) the second is O(k^2)
 
         if combination_method == "rerank":
             # TODO: Make use of metadata such for citing and additional context
