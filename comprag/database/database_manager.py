@@ -7,8 +7,9 @@ from asyncio import Future
 from collections.abc import Awaitable
 from hashlib import sha256
 from pprint import pformat
-from typing import Literal
+from typing import Callable, Literal
 
+import colorama
 from database.database_config import Database, Loader, Reranker, get_databases
 from database.registry import ChunkId, FileId, FileMetaData, Registry, VectorStoreId
 from langchain_core.documents import Document
@@ -17,13 +18,25 @@ from util.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
 
+SearchMethodName = str
+SearchMethodTag = int
+
 
 class DatabaseManager(metaclass=SingletonMeta):
     def __init__(self):
-        self.databases: list[Database] = get_databases()
+        self.databases: list[Database] = [Database(**conf.__dict__, tag=i) for i, conf in enumerate(get_databases())]
         self.loader = Loader()
         self.reranker = Reranker()
         self.registry = Registry()
+        self.search_methods: dict[SearchMethodName, SearchMethodTag] = {}
+
+        registered = self.registry.get_vector_store_ids()
+        present = [database.id for database in self.databases]
+        missing = set(present) - set(registered)
+        for database_id in missing:
+            logger.info(f"Database '{database_id}' not registered, registering...")
+            self.registry.register_vector_store(database_id)
+            logger.info(f"Database '{database_id}' registered")
 
     def _upload_dir(self, path) -> Future[list[FileId | None]]:
         logger.info(f"Trying to upload directory '{path}'")
@@ -218,8 +231,16 @@ class DatabaseManager(metaclass=SingletonMeta):
         return len(pairs) * [0.5]
 
     async def search_by_database(
-        self, database_id: VectorStoreId, query: str, combination_method: Literal["rerank", "dp"] = "rerank", k: int = 4, knn: float = 1, mmr: float = 1, mb25: float = 1
-    ) -> list[tuple[ChunkId, str]]:
+        self,
+        database_id: VectorStoreId,
+        query: str,
+        combination_method: Literal["rerank", "dp", "concat"] = "rerank",
+        k: int = 4,
+        knn: float = 1,
+        mmr: float = 1,
+        mb25: float = 1,
+        return_all: bool = False,
+    ) -> list[tuple[Document, int]]:
         """
         Combines the knn, mmr, and mb25 search results to create a better search function for the given database
 
@@ -245,10 +266,13 @@ class DatabaseManager(metaclass=SingletonMeta):
         mmr_results = [doc for doc in mmr_results if doc not in knn_results and doc not in mb25_results]
         knn_results = [doc for doc in knn_results if doc not in mb25_results]
 
+        mmr_results = [doc for doc in mmr_results if doc not in mb25_results]
+
         # Create tags for the different methods, to collect metadata
-        knn_tag: int = 0
-        mmr_tag: int = 1
-        mb25_tag: int = 2
+        # TODO: Factor out when the query types become independent
+        knn_tag = 0
+        mmr_tag = 1
+        mb25_tag = 2
 
         tags = [knn_tag, mmr_tag, mb25_tag]
         tags_size = max(tags) + 1
@@ -279,12 +303,50 @@ class DatabaseManager(metaclass=SingletonMeta):
             )
 
             logger.debug(f"fetched documents: {pformat(reranked)}")
-
-            top_k = [results[index][0] for _, index in reranked][:k]
+            ordered = [(results[index][0], results[index][1]) for _, index in reranked]
+            top_k = ordered[:k] if not return_all else ordered
 
             # Get the actual file ids to ba able to collect telemetry
-            return [(self.registry.get_chunk_id(doc), self.registry.get_content(doc)) for doc in top_k]
+            return top_k
+
+        elif combination_method == "concat":
+            # Concatenate the results and sort them by relevance
+            # This is the simplest method and is O(k)
+            return results[:k] if not return_all else results
 
         elif combination_method == "dp":
             # TODO: Implement the dynamic programming algorithm
             raise NotImplementedError("WIP")
+
+    def print_stats(self):
+        # Print the number of uploaded files
+        # Print the number of total chunk
+        # Print vectordb :
+        # Print the number of chunks uploaded into each vector db
+
+        total_files = self.registry.get_total_files()
+        total_chunks = self.registry.get_total_chunks()
+        vector_db_stats = self.registry.get_vector_db_stats()
+
+        # Print {Dark blue}: {Dark orange}
+
+        # Lets try to make it 40 wide with the stats left aligned
+        # And the names right and with ellipsis if too long
+        def line(lhs: str, rhs: str, width=40, padding=1) -> str:
+            right_len = len(rhs)
+            left_len = len(lhs)
+            if right_len + left_len + padding > width:
+                # Truncate the left side with 3 dots
+                lhs = lhs[: width - right_len - padding - 3] + "..."
+                left_len = len(lhs)
+
+            padding_len = width - left_len - right_len
+            return f"{colorama.Fore.BLUE}{lhs}{colorama.Fore.RESET}{' ' * padding_len}{colorama.Fore.YELLOW}{rhs}{colorama.Fore.RESET}"
+
+        print(line("Total:", f"{total_files} files"))
+        print(line("Total:", f"{total_chunks} chunks"))
+
+        # print line --- colored
+        print(f"{colorama.Fore.BLUE}{'-' * 40}{colorama.Fore.RESET}")
+        for vector_db, stats in vector_db_stats.items():
+            print(line(f"{vector_db}:", f"{stats} chunks"))

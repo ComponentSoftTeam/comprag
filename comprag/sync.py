@@ -8,23 +8,12 @@ from database.database_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
+
 def main(args: Namespace):
     dm = DatabaseManager()
 
-    if args.upload:
+    if not args.dry_run:
+        dm.sync()
 
-        @async_to_sync
-        async def upload():
-            print("hey")
-            return await dm.upload(path=args.upload)
-
-        files = upload()
-
-        print("Succesfully uploaded files:")
-        for file in files:
-            print(file)
-
-
-    print(dm.registry.get_missing_chunks())
-    dm.sync()
-    print(dm.registry.get_missing_chunks())
+    if args.list:
+        dm.print_stats()

@@ -9,31 +9,43 @@ from hashlib import sha256
 from typing import Any, cast
 
 import numpy as np
+from chromadb.api.types import D
 from database.registry import FileId, FileMetaData, Registry, VectorStoreId
 from langchain_chroma import Chroma
 from langchain_community.document_loaders.text import TextLoader
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from numpy.typing import NDArray
-from sentence_transformers import CrossEncoder
+from sentence_transformers import CrossEncoder, SentenceTransformer
 from util.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
 
+DatabaseTag = int
+
 
 @dataclass
-class Database:
+class DatabaseConf:
     id: VectorStoreId
     vector_store: VectorStore
 
 
-def get_databases() -> list[Database]:
+@dataclass
+class Database(DatabaseConf):
+    tag: DatabaseTag
+
+
+def get_databases() -> list[DatabaseConf]:
+    # I want to use the SentenceTransformer as the embedder
+    bge_m3_embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return [
-        Database(id="chroma openai", vector_store=Chroma(embedding_function=OpenAIEmbeddings(), persist_directory="./db/chroma_openai")),
-        Database(id="chroma mistral", vector_store=Chroma(embedding_function=MistralAIEmbeddings(), persist_directory="./db/chroma_mistral")),
+        # DatabaseConf(id="chroma openai", vector_store=Chroma(embedding_function=OpenAIEmbeddings(), persist_directory="./db/chroma_openai")),
+        # DatabaseConf(id="chroma mistral", vector_store=Chroma(embedding_function=MistralAIEmbeddings(), persist_directory="./db/chroma_mistral")),
+        DatabaseConf(id="bge m3", vector_store=Chroma(embedding_function=bge_m3_embedding, persist_directory="./db/bge_m3")),
     ]
 
 

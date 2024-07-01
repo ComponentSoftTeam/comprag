@@ -26,6 +26,9 @@ https://arxiv.org/html/2404.07220v1
 - We also experiment with different retriever strategies
 - Like query expansion, etc.
 
+## Embeddings
+https://towardsdatascience.com/openai-vs-open-source-multilingual-embedding-models-e5ccb7c90f05
+
 ## Rerankers
 
 https://medium.com/llamaindex-blog/boosting-rag-picking-the-best-embedding-reranker-models-42d079022e83
@@ -50,3 +53,4 @@ https://medium.com/llamaindex-blog/boosting-rag-picking-the-best-embedding-reran
 The rag will be benchmarked according to the techniques described in arXiv:2309.01431(cs)
 
 
+https://huggingface.co/datasets/miracl/miracl

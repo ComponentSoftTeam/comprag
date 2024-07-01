@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from hashlib import sha256
 
 from langchain_core.documents import Document
-from langchain_core.vectorstores import VectorStore
 from util.singleton import SingletonMeta
 
 VectorStoreId = str
@@ -74,6 +73,27 @@ class Registry(metaclass=SingletonMeta):
             )
 
             conn.commit()
+
+    def register_vector_store(self, vector_store_id: VectorStoreId):
+        with sqlite3.connect(self.REGISTRY_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+            INSERT OR REPLACE INTO vector_stores (vector_store_id) VALUES (?)
+            """,
+                (vector_store_id,),
+            )
+            conn.commit()
+
+    def get_vector_store_ids(self) -> list[VectorStoreId]:
+        with sqlite3.connect(self.REGISTRY_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+            SELECT vector_store_id FROM vector_stores
+            """
+            )
+            return [vector_store_id for vector_store_id, in cursor.fetchall()]
 
     def add_chunk_ids(self, vector_store_id: VectorStoreId, chunk_ids: list[tuple[VectorStoreEntryId, ChunkId]]):
         # We can assume that the vector store exists
@@ -178,6 +198,40 @@ class Registry(metaclass=SingletonMeta):
     #
     #         return cursor.fetchone()[0]
 
+    def get_total_files(self) -> int:
+        with sqlite3.connect(self.REGISTRY_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(file_id) FROM files
+            """
+            )
+            return cursor.fetchone()[0]
+
+    def get_total_chunks(self) -> int:
+        with sqlite3.connect(self.REGISTRY_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT COUNT(chunk_id) FROM file_chunks
+            """
+            )
+            return cursor.fetchone()[0]
+
+    def get_vector_db_stats(self) -> dict[VectorStoreId, int]:
+        """
+        Returns the number of chunks in each vector store
+        """
+
+        with sqlite3.connect(self.REGISTRY_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+            SELECT vector_store_id, COUNT(chunk_id) FROM vector_store_entries GROUP BY vector_store_id
+            """
+            )
+            return {vector_store_id: count for vector_store_id, count in cursor.fetchall()}
+
     def get_chunk(self, chunk_id: ChunkId) -> FileMetaData:
         with sqlite3.connect(self.REGISTRY_PATH) as conn:
             cursor = conn.cursor()
@@ -223,6 +277,36 @@ class Registry(metaclass=SingletonMeta):
 
     def get_chunks(self, chunk_ids: list[ChunkId]) -> list[FileMetaData]:
         return [self.get_chunk(chunk_id) for chunk_id in chunk_ids]
+
+    def get_all_files(self, query: str = "", limit: int = 10) -> list[FileMetaData]:
+        with sqlite3.connect(self.REGISTRY_PATH) as conn:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    files.file_id, files.file_name, file_chunks.chunk_id, chunk_metadata, content
+                FROM
+                    files
+                JOIN
+                    file_chunks ON files.file_id = file_chunks.file_id
+                WHERE content LIKE ?
+                LIMIT ?
+                            """,
+                (f"%{query}%", limit),
+            )
+
+            return [
+                FileMetaData(
+                    file_id=file_id,
+                    file_name=file_name,
+                    chunk_id=chunk_id,
+                    chunk_content=content,
+                    chunk_metadata=json.loads(chunk_metadata),
+                    vector_store_entries={},
+                )
+                for (file_id, file_name, chunk_id, chunk_metadata, content) in cursor.fetchall()
+            ]
 
     def get_file(self, file_id: FileId) -> list[FileMetaData]:
         with sqlite3.connect(self.REGISTRY_PATH) as conn:

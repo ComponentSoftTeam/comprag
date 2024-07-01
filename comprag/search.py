@@ -23,7 +23,7 @@ async def async_main(args: Namespace):
 
     query = args.query
     k = args.k
-    vector_store_id = "chroma openai"
+    vector_store_id = "bge m3"
 
     if args.rerank:
         # TODO: Add the ability to change the weights
