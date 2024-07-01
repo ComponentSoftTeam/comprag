@@ -43,8 +43,8 @@ def get_databases() -> list[DatabaseConf]:
     # I want to use the SentenceTransformer as the embedder
     bge_m3_embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return [
-        # DatabaseConf(id="chroma openai", vector_store=Chroma(embedding_function=OpenAIEmbeddings(), persist_directory="./db/chroma_openai")),
-        # DatabaseConf(id="chroma mistral", vector_store=Chroma(embedding_function=MistralAIEmbeddings(), persist_directory="./db/chroma_mistral")),
+        DatabaseConf(id="chroma openai", vector_store=Chroma(embedding_function=OpenAIEmbeddings(), persist_directory="./db/chroma_openai")),
+        DatabaseConf(id="chroma mistral", vector_store=Chroma(embedding_function=MistralAIEmbeddings(), persist_directory="./db/chroma_mistral")),
         DatabaseConf(id="bge m3", vector_store=Chroma(embedding_function=bge_m3_embedding, persist_directory="./db/bge_m3")),
     ]
 

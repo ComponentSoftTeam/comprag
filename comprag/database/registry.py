@@ -278,6 +278,17 @@ class Registry(metaclass=SingletonMeta):
     def get_chunks(self, chunk_ids: list[ChunkId]) -> list[FileMetaData]:
         return [self.get_chunk(chunk_id) for chunk_id in chunk_ids]
 
+    def get_number_of_matches(self, query: str) -> int:
+        with sqlite3.connect(self.REGISTRY_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+            SELECT COUNT(*) FROM file_chunks WHERE content LIKE ?
+            """,
+                (f"%{query}%",),
+            )
+            return cursor.fetchone()[0]
+
     def get_all_files(self, query: str = "", limit: int = 10) -> list[FileMetaData]:
         with sqlite3.connect(self.REGISTRY_PATH) as conn:
             cursor = conn.cursor()

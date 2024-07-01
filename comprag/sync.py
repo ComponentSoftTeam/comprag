@@ -4,7 +4,7 @@ import logging
 from argparse import Namespace
 
 from asgiref.sync import async_to_sync
-from database.database_manager import DatabaseManager
+from comprag.database.database_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 

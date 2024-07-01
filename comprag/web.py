@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from argparse import Namespace
@@ -39,13 +40,13 @@ def main(args: Namespace):
 
     def get_dataset(query: str = ""):
         results = dm.registry.get_all_files(query, 10)
-        print("results", results)
-        results_dict = [asdict(r) for r in results]
-        print("results_dict", results_dict)
-        results_list = [list(r.values()) for r in results_dict]
-        print("results_list", results_list)
-        return gr.Dataset(samples=results_list)
+        total_results = dm.registry.get_number_of_matches(query)
 
+        results_list = [[result.file_name, result.chunk_id[0:7], result.chunk_content, json.dumps(result.chunk_metadata), result.file_id[0 : result.file_id.rfind("-") + 1 + 7]] for result in results]
+        return (results_list, f"Total Results: {total_results}")
+
+    _dataset, _total_results = get_dataset()
+    _dataset_headers = ["File name", "Chunk id", "Content", "Metadata", "File id"]
     with gr.Blocks() as web_ui:
         with gr.Tab(label="Chatbot"):
             pass
@@ -73,7 +74,19 @@ def main(args: Namespace):
 
             with gr.Row():
                 with gr.Accordion("Inspect"):
-                    dataset = get_dataset()
+                    with gr.Row():
+                        dataset_search = gr.Textbox(label="Search", placeholder="Search for keywords")
+
+                        total_results = gr.Label(value=f"Total Results: {_total_results}")
+
+                    with gr.Row():
+                        dataset = gr.DataFrame(value=_dataset, interactive=False, headers=_dataset_headers)
+
+                        dataset_search.submit(
+                            fn=get_dataset,
+                            inputs=dataset_search,
+                            outputs=[dataset, total_results],
+                        )
 
             with gr.Row():
                 with gr.Accordion("Upload"):
