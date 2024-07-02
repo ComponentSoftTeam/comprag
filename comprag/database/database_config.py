@@ -12,7 +12,10 @@ import numpy as np
 from chromadb.api.types import D
 from database.registry import FileId, FileMetaData, Registry, VectorStoreId
 from langchain_chroma import Chroma
+
 from langchain_community.document_loaders.text import TextLoader
+from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, UnstructuredRTFLoader, UnstructuredHTMLLoader, UnstructuredXMLLoader, JSONLoader, CSVLoader
+
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -43,8 +46,8 @@ def get_databases() -> list[DatabaseConf]:
     # I want to use the SentenceTransformer as the embedder
     bge_m3_embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return [
-        DatabaseConf(id="chroma openai", vector_store=Chroma(embedding_function=OpenAIEmbeddings(), persist_directory="./db/chroma_openai")),
-        DatabaseConf(id="chroma mistral", vector_store=Chroma(embedding_function=MistralAIEmbeddings(), persist_directory="./db/chroma_mistral")),
+        #DatabaseConf(id="chroma openai", vector_store=Chroma(embedding_function=OpenAIEmbeddings(), persist_directory="./db/chroma_openai")),
+        #DatabaseConf(id="chroma mistral", vector_store=Chroma(embedding_function=MistralAIEmbeddings(), persist_directory="./db/chroma_mistral")),
         DatabaseConf(id="bge m3", vector_store=Chroma(embedding_function=bge_m3_embedding, persist_directory="./db/bge_m3")),
     ]
 
@@ -114,7 +117,26 @@ class Loader(metaclass=SingletonMeta):
         # XML Loader: https://python.langchain.com/v0.2/docs/integrations/document_loaders/xml/
 
         # docx, txt, rtf, pdf, html, xml, json, csv, tsv, md, odt, tex, log, ini, yaml, yml, cfg, properties, php, asp, jsp, aspx, htm, xhtml, rss, atom, srt, vtt, pptx, xlsx, dat, sql, h, cpp, py, java, js, rb, pl, sh, bat, ps1, c, go, swift, kt, cs, scala, ini, toml
+
+        # json: schema is needed to extract parts
         match ext:
+            case ".docx":
+                return Docx2txtLoader(path).aload()
+            case ".txt":
+                return TextLoader(path, autodetect_encoding=True).aload()
+            case ".pdf":
+                return PyPDFLoader(path).aload()
+            case ".rtf":
+                return UnstructuredRTFLoader(path).aload()
+            case ".html":
+                return UnstructuredHTMLLoader(path).aload()
+            case ".xml":
+                return UnstructuredXMLLoader(path).aload()
+            case ".json":
+                logger.error("JSON loader is not implemented yet")
+                return None
+            case ".csv":
+                return CSVLoader(path).aload()
             case _:
                 logger.error(f"Unsupported file extension for file '{path}'")
                 return None
