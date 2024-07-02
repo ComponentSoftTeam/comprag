@@ -12,6 +12,14 @@ poetry install
 poetry run pre-commit install
 ```
 
+### Configure
+- Copy the .env.sample file into a file .env, and fill in the values
+- To get an access token for discord follow this [guide](https://discordpy.readthedocs.io/en/stable/discord.html#discord-intro)
+- To get access to the firebase db, contact me in discord
+- To add a package to the project use  `poetry add [package name]`
+- To add a dev package use `poetry add openai --group dev`
+- Make sure that your LSP uses the poetry venv, in vs code click bottom right at 'Python' and select Poetry
+
 ### Code formatting, linting
 #### Sorting imports
 We are sorting the imports to minimize diffs when merging  
