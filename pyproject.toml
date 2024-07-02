@@ -24,6 +24,7 @@ langchain-huggingface = "^0.0.3"
 colorama = "^0.4.6"
 gradio = "^4.37.2"
 docx2txt = "^0.8"
+pypdf = "^4.2.0"
 
 [tool.poetry.group.dev.dependencies]
 isort = "^5.13.2"
