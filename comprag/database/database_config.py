@@ -32,17 +32,12 @@ DatabaseTag = int
 
 
 @dataclass
-class DatabaseConf:
+class Database:
     id: VectorStoreId
     vector_store: VectorStore
 
 
-@dataclass
-class Database(DatabaseConf):
-    tag: DatabaseTag
-
-
-def get_databases() -> list[DatabaseConf]:
+def get_databases() -> list[Database]:
     # I want to use the SentenceTransformer as the embedder
     bge_m3_embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return [
@@ -56,7 +51,7 @@ class Reranker(metaclass=SingletonMeta):
     def __init__(self):
         self.bge_v2_m3_reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
 
-    def rerank(self, query: str, documents: list[str], reweight: list[float] | None = None) -> list[tuple[float, int]]:
+    def rerank(self, query: str, documents: list[str]) -> list[tuple[float, int]]:
         """
         Returns the reranked documents based on the query and the initial ranking of the documents.
 
@@ -76,12 +71,6 @@ class Reranker(metaclass=SingletonMeta):
         # Creating a flat float array using np.array
 
         scores = cast(NDArray[np.float_], scores)
-
-        if reweight:
-            scores = np.array([s * r for s, r in zip(scores, reweight)])
-            print("Scores after reweighting: ", scores)
-            print("Weights: ", reweight)
-            scores = scores / np.sum(scores)
 
         order: list[int] = np.argsort(scores)[::-1].tolist()
         return [(scores[i], i) for i in order]

@@ -3,6 +3,8 @@ import sqlite3
 from dataclasses import dataclass
 from hashlib import sha256
 
+from langchain.retrievers import ContextualCompressionRetriever, EnsembleRetriever
+from langchain.retrievers.document_compressors import CohereRerank
 from langchain_core.documents import Document
 from util.singleton import SingletonMeta
 
@@ -172,7 +174,34 @@ class Registry(metaclass=SingletonMeta):
         return doc.page_content
 
     def get_chunk_id(self, doc: Document) -> ChunkId:
-        return sha256(self.get_content(doc).encode()).hexdigest()
+        content = self.get_content(doc) + json.dumps(doc.metadata)
+
+        return sha256(content.encode()).hexdigest()
+
+    def get_file_id(self, docs: list[Document]) -> FileId:
+        content = "\n\n".join(self.get_content(doc) + json.dumps(doc.metadata) for doc in docs)
+        return sha256(content.encode()).hexdigest()
+
+    def get_file_id_form_chunk_doc(self, doc: Document) -> FileId | None:
+        chunk_id = self.get_chunk_id(doc)
+        file_id = self.get_file_from_chunk_id(chunk_id)
+        return file_id
+
+    def get_file_from_chunk_id(self, chunk_id: ChunkId) -> FileId | None:
+        with sqlite3.connect(self.REGISTRY_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+            SELECT file_id FROM file_chunks WHERE chunk_id = ?
+            """,
+                (chunk_id,),
+            )
+
+            result = cursor.fetchone()
+
+            if not result:
+                return None
+            return result[0]
 
     def has_file(self, file_id: FileId) -> bool:
         with sqlite3.connect(self.REGISTRY_PATH) as conn:

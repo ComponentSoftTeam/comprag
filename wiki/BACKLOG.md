@@ -5,3 +5,4 @@
 - [ ] More advanced reranker with https://huggingface.co/BAAI/bge-m3
 - [ ] Check out the "faster" cpu optimized version from https://huggingface.co/EmbeddedLLM/bge-reranker-base-onnx-o3-cpu
 - [ ] Add db filter: https://github.com/langchain-ai/langchain/discussions/9645
+- [ ] There is a cohre raranker (compressor), add it to the options awailable

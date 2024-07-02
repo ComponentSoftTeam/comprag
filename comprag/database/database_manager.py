@@ -5,6 +5,8 @@ import logging
 import os
 from asyncio import Future
 from collections.abc import Awaitable
+from dataclasses import dataclass
+from enum import Enum
 from hashlib import sha256
 from pprint import pformat
 from typing import Callable, Literal
@@ -18,17 +20,28 @@ from util.singleton import SingletonMeta
 
 logger = logging.getLogger(__name__)
 
-SearchMethodName = str
-SearchMethodTag = int
+
+class SearchMethod(Enum):
+    KNN = "knn"
+    MMR = "mmr"
+    BM25 = "bm25"
+
+
+@dataclass
+class RRFAccumulator:
+    chunk_id: ChunkId
+    document: Document
+    methods: list[SearchMethod]
+    score: float
+    methods_by_db: list[tuple[VectorStoreId, list[SearchMethod]]]
 
 
 class DatabaseManager(metaclass=SingletonMeta):
     def __init__(self):
-        self.databases: list[Database] = [Database(**conf.__dict__, tag=i) for i, conf in enumerate(get_databases())]
+        self.databases: list[Database] = get_databases()
         self.loader = Loader()
         self.reranker = Reranker()
         self.registry = Registry()
-        self.search_methods: dict[SearchMethodName, SearchMethodTag] = {}
 
         registered = self.registry.get_vector_store_ids()
         present = [database.id for database in self.databases]
@@ -78,21 +91,14 @@ class DatabaseManager(metaclass=SingletonMeta):
         file = await file_future
         chunks = self._chunk_file(file, ext)
 
-        try:
-            file_checksum = sha256(b"\n\n".join(self.registry.get_content(chunk).encode() for chunk in chunks))
-        except Exception as e:
-            logger.error(f"Failed to encode file: '{path}'\n{e}")
-            return None
-
         file_name = os.path.basename(path)
-        file_id = f"{file_name}-file-{file_checksum.hexdigest()}"
+        file_id = self.registry.get_file_id(chunks)
 
         if self.registry.has_file(file_id):
             logger.info(f"File '{path}' already uploaded")
             return file_id
 
         def _get_chunk_metadata(chunk: Document) -> FileMetaData:
-            nonlocal file_checksum
             nonlocal file_name
             nonlocal file_id
             nonlocal path
@@ -166,7 +172,7 @@ class DatabaseManager(metaclass=SingletonMeta):
     def get_database(self, database_id: VectorStoreId) -> Database | None:
         return next((db for db in self.databases if db.id == database_id), None)
 
-    def mmr_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[Document]]:
+    def mmr_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[tuple[Document, SearchMethod]]]:
         """
         Returns the top K most similar entries in the specified vector store
         Internali MMR is used.
@@ -175,6 +181,7 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         The returned tuple contains the relevance score [0-1] and the document itself
         """
+
         database = self.get_database(database_id)
         if not database:
             logger.error(f"Database '{database_id}' not found")
@@ -184,15 +191,21 @@ class DatabaseManager(metaclass=SingletonMeta):
 
             return default_value()
 
-        return database.vector_store.amax_marginal_relevance_search(k=k, fetch_k=k * 5, query=query)
+        async def search() -> list[tuple[Document, SearchMethod]]:
+            # TODO: get the sorted variant
+            results = await database.vector_store.amax_marginal_relevance_search(k=k, fetch_k=k * 5, query=query)
+            return [(res, SearchMethod.MMR) for res in results]
 
-    def bm25_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[Document]]:
+        return search()
+
+    def bm25_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[tuple[Document, SearchMethod]]]:
         """
         Returns the top K most similar entries by keyword matches.
         Internali bm25 is used.
 
         The returned tuple contains the relevance score [0-1] and the document itself
         """
+
         database = self.get_database(database_id)
         if not database:
             logger.error(f"Database '{database_id}' not found")
@@ -208,13 +221,14 @@ class DatabaseManager(metaclass=SingletonMeta):
 
         return default_value()
 
-    def similarity_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[Document]]:
+    def similarity_search_by_database(self, database_id: VectorStoreId, query: str, k: int) -> Awaitable[list[tuple[Document, SearchMethod]]]:
         """
         Returns the top K most similar entries in the specified vector store
         Internaly an approximate KNN is used.
 
         The returned tuple contains the relevance score [0-1] and the document itself
         """
+
         database = self.get_database(database_id)
         if not database:
             logger.error(f"Database '{database_id}' not found")
@@ -225,96 +239,151 @@ class DatabaseManager(metaclass=SingletonMeta):
             return default_value()
 
         # TODO: Check if the databases actulaly support this functionality and if they implement it correctly
-        return database.vector_store.asimilarity_search(query=query, k=k)
+        async def search() -> list[tuple[Document, SearchMethod]]:
+            results = await database.vector_store.asimilarity_search_with_relevance_scores(query=query, k=k)
 
-    def batch_similarity(self, pairs: list[tuple[str, str]]) -> list[float]:
-        return len(pairs) * [0.5]
+            results.sort(key=lambda x: x[1], reverse=True)  # Sort by the relevance score
+
+            return [(res, SearchMethod.KNN) for res, _ in results]
+
+        return search()
+
+    async def search(
+        self,
+        query: str,
+        # rerank_method: Literal["cross-encoder", "rrf"] = "rrf",
+        sub_rerank_method: Literal["cross-encoder", "rrf"] = "rrf",
+        knn: float = 1,
+        mmr: float = 1,
+        bm25: float = 1,
+        k: int = 4,
+        return_all: bool = False,
+    ) -> list[tuple[ChunkId, Document, list[SearchMethod], VectorStoreId]]:
+        """
+        For all databases run the search and return the results
+        """
+
+        results_futures = [
+            self.search_by_database(
+                database_id=database.id,
+                query=query,
+                rerank_method=sub_rerank_method,
+                knn=knn,
+                mmr=mmr,
+                bm25=bm25,
+                k=k,
+                return_all=return_all,
+            )
+            for database in self.databases
+        ]
+
+        results_by_database = await asyncio.gather(*results_futures, return_exceptions=False)
+
+        database_ids = [db.id for db in self.databases]
+
+        results_rrf: dict[ChunkId, RRFAccumulator] = {}
+        for database_id, results in zip(database_ids, results_by_database):
+            for rank, (chunk_id, doc, methods) in enumerate(results):
+                if chunk_id not in results_rrf:
+                    results_rrf[chunk_id] = RRFAccumulator(chunk_id, doc, [], 0, [])
+
+                results_rrf[chunk_id].methods_by_db.append((database_id, methods))
+                additional_score = 1 / (rank + 60)
+                results_rrf[chunk_id].score += additional_score
+
+        results_rrfacc_list = list(results_rrf.values())
+        results_rrfacc_list.sort(key=lambda x: x.score, reverse=True)
+
+        results = []
+        for rrf in results_rrfacc_list:
+            rrf.methods_by_db.sort(key=lambda x: x[0])
+            results.extend([(rrf.chunk_id, rrf.document, methods, db) for db, methods in rrf.methods_by_db])
+
+        return results[:k] if not return_all else results
 
     async def search_by_database(
         self,
         database_id: VectorStoreId,
         query: str,
-        combination_method: Literal["rerank", "dp", "concat"] = "rerank",
-        k: int = 4,
+        rerank_method: Literal["cross-encoder", "rrf"] = "rrf",
         knn: float = 1,
         mmr: float = 1,
-        mb25: float = 1,
+        bm25: float = 1,
+        k: int = 4,
         return_all: bool = False,
-    ) -> list[tuple[Document, int]]:
+    ) -> list[tuple[ChunkId, Document, list[SearchMethod]]]:
         """
-        Combines the knn, mmr, and mb25 search results to create a better search function for the given database
+        Combines the knn, mmr, and bm25 search results to create a better search function for the given database
 
         You may specify the linear contributions of each
         The relevance for the original query will be determined by a reranker, but you may infulecne this score with the linear factors
         """
 
-        # TODO: these parameters for the linear contributions should be automaticly set, based on the queried topic
-
         knn_future = self.similarity_search_by_database(database_id, query=query, k=k)
         mmr_future = self.mmr_search_by_database(database_id, query=query, k=k)
-        mb25_future = self.mmr_search_by_database(database_id, query=query, k=k)
+        bm25_future = self.bm25_search_by_database(database_id, query=query, k=k)
 
-        knn_results, mmr_results, mb25_results = await asyncio.gather(knn_future, mmr_future, mb25_future, return_exceptions=False)
+        knn_results, mmr_results, bm25_results = await asyncio.gather(knn_future, mmr_future, bm25_future, return_exceptions=False)
 
-        # The results likely contain duplicate documents
-        # We will attribute them in the following order
-        # mb25 > knn > mmr because of higher computational complexity
-
-        # TODO: Could do in O(H * n log n) with H as the cost of a hashfunction
-
-        # Dedupe O(n^2 * M) where M is the lenght of the LCS
-        mmr_results = [doc for doc in mmr_results if doc not in knn_results and doc not in mb25_results]
-        knn_results = [doc for doc in knn_results if doc not in mb25_results]
-
-        mmr_results = [doc for doc in mmr_results if doc not in mb25_results]
-
-        # Create tags for the different methods, to collect metadata
-        # TODO: Factor out when the query types become independent
-        knn_tag = 0
-        mmr_tag = 1
-        mb25_tag = 2
-
-        tags = [knn_tag, mmr_tag, mb25_tag]
-        tags_size = max(tags) + 1
-        weights = [0.0] * tags_size
-
-        weights[knn_tag] = knn
-        weights[mmr_tag] = mmr
-        weights[mb25_tag] = mb25
-
-        # Tag the results
-        results: list[tuple[Document, int]] = []
-        results.extend([(doc, knn_tag) for doc in knn_results])
-        results.extend([(doc, mmr_tag) for doc in mmr_results])
-        results.extend([(doc, mb25_tag) for doc in mb25_results])
+        # Collection
 
         # Two algorithms are considered
-        # 1. Append all of the results together and sort by relevance to the original query
-        # 2. Create a cross product of relevances and pick the best k out of them (like the mmr does)
+        # 1. Rerank with the cross-encoder
+        # 2. Rerank using the reciprocal rank fusion algorithm
 
-        # The (1.) is O(k) the second is O(k^2)
+        if rerank_method == "cross-encoder":
 
-        if combination_method == "rerank":
-            # TODO: Make use of metadata such for citing and additional context
+            # Dedupe and attribute in O(H*n) Where H is the cost of the Hash funciton and n is the total number of documents
+            results_ce: dict[ChunkId, tuple[ChunkId, Document, list[SearchMethod]]] = {}
+            for result in [knn_results, mmr_results, bm25_results]:
+                for doc, method in result:
+                    chunk_id = self.registry.get_chunk_id(doc)
+                    if chunk_id not in results_ce:
+                        results_ce[chunk_id] = (chunk_id, doc, [])
+
+                    results_ce[chunk_id][2].append(method)
+
+            results_list = list(results_ce.values())
+
             reranked = self.reranker.rerank(
                 query=query,
-                documents=[self.registry.get_content(doc) for doc, _ in results],
-                reweight=[weights[tag] for _, tag in results],
+                documents=[self.registry.get_content(doc) for _, doc, _ in results_list],
             )
 
             logger.debug(f"fetched documents: {pformat(reranked)}")
-            ordered = [(results[index][0], results[index][1]) for _, index in reranked]
+            ordered = [results_list[index] for _, index in reranked]
             top_k = ordered[:k] if not return_all else ordered
 
             # Get the actual file ids to ba able to collect telemetry
             return top_k
 
-        elif combination_method == "concat":
-            # Concatenate the results and sort them by relevance
-            # This is the simplest method and is O(k)
-            return results[:k] if not return_all else results
+        elif rerank_method == "rrf":
+            # RRS: Rank Reciprocal Score
+            total_weight = knn + mmr + bm25
+            weights: dict[SearchMethod, float] = {}
+            weights[SearchMethod.KNN] = knn / total_weight
+            weights[SearchMethod.MMR] = mmr / total_weight
+            weights[SearchMethod.BM25] = bm25 / total_weight
 
-        elif combination_method == "dp":
+            # Dedupe and attribute in O(H*n) Where H is the cost of the Hash funciton and n is the total number of documents
+            results_rrf: dict[ChunkId, RRFAccumulator] = {}
+            for result in [knn_results, mmr_results, bm25_results]:
+                for rank, (doc, method) in enumerate(result):
+                    chunk_id = self.registry.get_chunk_id(doc)
+                    if chunk_id not in results_rrf:
+                        results_rrf[chunk_id] = RRFAccumulator(chunk_id, doc, [], 0, [])
+
+                    additional_score = weights[method] / (rank + 60)
+                    results_rrf[chunk_id].score += additional_score
+                    results_rrf[chunk_id].methods.append(method)
+
+            results_rrfacc_list = list(results_rrf.values())
+            results_rrfacc_list.sort(key=lambda x: x.score, reverse=True)
+            results_rrf_list = [(rrf.chunk_id, rrf.document, rrf.methods) for rrf in results_rrfacc_list]
+
+            return results_rrf_list[:k] if not return_all else results_rrf_list
+
+        elif rerank_method == "dp":
             # TODO: Implement the dynamic programming algorithm
             raise NotImplementedError("WIP")
 
