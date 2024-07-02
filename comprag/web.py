@@ -172,12 +172,13 @@ def database_tab(args: Namespace, dm: DatabaseManager) -> None:
                         gr.Error(f"Unexpected error! Failed to upload {base_name}")
                         logger.error(f"Failed to upload {base_name}\n{e}")
 
-                return ([], get_dataset(query), get_database_stats(), get_vector_db_stats())
+                dataset, total = get_dataset(query)
+                return ([], dataset, total, get_database_stats(), get_vector_db_stats())
 
             upload_button.click(
                 fn=upload_files,
                 inputs=[select_button, dataset_search],
-                outputs=[select_button, dataset, aggregate_stats_component, vectordb_stats_component],
+                outputs=[select_button, dataset, total_results, aggregate_stats_component, vectordb_stats_component],
             )
 
     with gr.Row():
