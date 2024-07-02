@@ -4,11 +4,13 @@ import json
 import logging
 import os
 from argparse import Namespace
-from typing import Any
+from typing import Any, Literal, cast
 
 import gradio as gr
-from database.database_manager import DatabaseManager
+from database.database_manager import DatabaseManager, SearchMethod
+from database.registry import ChunkId
 from langchain_core.documents import Document
+from numpy import minimum
 
 from comprag.database.registry import VectorStoreId
 
@@ -75,7 +77,7 @@ def database_tab(args: Namespace, dm: DatabaseManager) -> None:
                 result.chunk_id[0:7],
                 result.chunk_content,
                 json.dumps(result.chunk_metadata),
-                result.file_id[0 : result.file_id.rfind("-") + 1 + 7],
+                result.file_id[0:7],
             ]
             for result in results
         ]
@@ -218,13 +220,9 @@ def search_tab(args: Namespace, dm: DatabaseManager) -> None:
         dm (DatabaseManager): The database manager instance.
     """
 
-    async def search(query: str = ""):
-        results = await dm.search_by_database(
-            database_id="bge m3",
-            query=query,
-            combination_method="rerank",
-            k=4,
-        )
+    async def search(database_id: str, query: str, k: int, rerank_method: str):
+
+        rerank_method = cast(Literal["cross-encoder", "rrf"], rerank_method)
 
         def into_md_json(dictionary: dict[str, Any]) -> str:
             return f"```json\n{json.dumps(dictionary, indent=4)}\n```"
@@ -245,15 +243,47 @@ def search_tab(args: Namespace, dm: DatabaseManager) -> None:
 
             return f"```{ext}\n{doc.page_content}\n```"
 
-        return [
-            [
+        def format_serach_result(doc: Document, search_methods: list[SearchMethod], database_id: str) -> list[str]:
+            search_methods.sort(key=lambda x: x.value)
+
+            return [
                 into_ext_md(doc),
                 into_md_json(doc.metadata),
-                tag.value,
-                "bge m3",
+                ", ".join([method.value for method in search_methods]),
+                database_id,
             ]
-            for doc, tag in results
-        ]
+
+        if database_id == "all":
+            results = await dm.search(
+                query=query,
+                # rerank_method="rrf",
+                sub_rerank_method=rerank_method,
+                k=k,
+            )
+
+            return [format_serach_result(doc, search_methods, db_id) for _, doc, search_methods, db_id in results]
+
+        else:
+            results = await dm.search_by_database(
+                database_id=database_id,
+                query=query,
+                rerank_method=rerank_method,
+                k=k,
+            )
+
+            return [format_serach_result(doc, search_methods, database_id) for _, doc, search_methods in results]
+
+    with gr.Row():
+        """
+        Search settings component
+        """
+
+        with gr.Accordion("Search Settings"):
+            with gr.Row():
+                choices = ["all"] + [db.id for db in dm.databases]
+                search_database = gr.Dropdown(label="Database", choices=list(choices), value="all")
+                search_k = gr.Slider(label="Number of returned results / db", minimum=1, maximum=10, step=1, value=4)
+                search_rerank_method = gr.Radio(label="Rerank Method", choices=["cross-encoder", "rrf"], value="cross-encoder")
 
     with gr.Row():
         """
@@ -271,7 +301,7 @@ def search_tab(args: Namespace, dm: DatabaseManager) -> None:
 
         search_input.submit(
             fn=search,
-            inputs=[search_input],
+            inputs=[search_database, search_input, search_k, search_rerank_method],
             outputs=[search_results],
         )
 

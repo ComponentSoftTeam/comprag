@@ -25,17 +25,21 @@ async def async_main(args: Namespace):
     k = args.k
     vector_store_id = "bge m3"
 
-    if args.rerank:
+    if args.cross_encoder:
         # TODO: Add the ability to change the weights
         results = await dm.search_by_database(
             database_id=vector_store_id,
             query=query,
-            combination_method="rerank",
+            rerank_method="cross-encoder",
             k=k,
         )
-
-    elif args.dp:
-        raise NotImplementedError("Not implemented yet")
+    elif args.rrf:
+        results = await dm.search_by_database(
+            database_id=vector_store_id,
+            query=query,
+            rerank_method="rrf",
+            k=k,
+        )
     elif args.knn:
         results = await dm.similarity_search_by_database(
             database_id=vector_store_id,

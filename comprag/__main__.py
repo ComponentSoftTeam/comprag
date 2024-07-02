@@ -85,8 +85,8 @@ if __name__ == "__main__":
     search_parser.add_argument("--k", "-k", help="The number of results to return", default=4, type=int)
 
     search_method = search_parser.add_mutually_exclusive_group(required=True)
-    search_method.add_argument("--rerank", action="store_true", help="Use the rerank combiner")
-    search_method.add_argument("--dp", action="store_true", help="Use the dp combiner")
+    search_method.add_argument("--cross-encoder", action="store_true", help="Use the rerank combiner")
+    search_method.add_argument("--rrf", action="store_true", help="Use the dp combiner")
 
     search_method.add_argument("--knn", action="store_true", help="Use only the the KNN search tool")
     search_method.add_argument("--mmr", action="store_true", help="Use only the the MMR search tool")
